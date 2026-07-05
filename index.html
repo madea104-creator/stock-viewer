@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>公司股價長期走勢</title>
+<style>
+:root{--bg:#0f1115;--panel:#171a21;--panel2:#1d212a;--line:#2a2f3a;--txt:#e6e9ef;
+--muted:#9aa3b2;--accent:#4f8cff;--pos:#ff5d5d;--gold:#e8b339;--warn:#ff9f43}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);
+font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;font-size:14px}
+header{padding:16px 20px;border-bottom:1px solid var(--line);background:var(--panel);
+display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+h1{font-size:18px;margin:0}
+#upd{font-size:12px;color:var(--muted)}
+#upd.stale{color:var(--warn)}
+.wrap{padding:16px 20px}
+.drop{border:2px dashed var(--line);border-radius:12px;padding:28px;text-align:center;color:var(--muted);background:var(--panel)}
+.drop.drag{border-color:var(--accent);color:var(--txt)}
+select{background:var(--panel2);border:1px solid var(--line);color:var(--txt);padding:9px 12px;border-radius:8px}
+.cards{display:flex;gap:12px;flex-wrap:wrap;margin:14px 0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 18px;min-width:160px}
+.card .k{color:var(--muted);font-size:12px}.card .v{font-size:22px;font-weight:650;margin-top:4px}
+.gold{color:var(--gold)}.chartbox{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:8px}
+#cv{width:100%;height:340px;display:block}.hint{color:var(--muted);font-size:12px;margin-top:6px}
+code{background:var(--panel2);padding:1px 6px;border-radius:5px}
+button{background:var(--panel2);border:1px solid var(--line);color:var(--txt);padding:9px 12px;border-radius:8px;cursor:pointer}
+input[type=text]{background:var(--panel2);border:1px solid var(--line);color:var(--txt);padding:9px 12px;border-radius:8px;min-width:240px}
+#cnt{color:var(--muted);font-size:12px}
+</style></head><body>
+<header><h1>公司股價長期走勢　（看這家會不會大漲）</h1><span id="upd"></span></header>
+<div class="wrap">
+  <div id="loader"><div class="drop" id="drop">把 <code>stock_history.json</code> 拖進這裡，或點此選擇
+    <input type="file" id="file" accept=".json" style="display:none"></div></div>
+  <div id="main" style="display:none">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <input type="text" id="q" placeholder="搜尋代碼或公司名，例如 1560 或 中砂">
+      <select id="gainmin">
+        <option value="0">全部漲幅</option>
+        <option value="2">最大漲幅 ≥ 2倍</option>
+        <option value="3">最大漲幅 ≥ 3倍</option>
+        <option value="5">最大漲幅 ≥ 5倍</option>
+        <option value="10">最大漲幅 ≥ 10倍</option>
+      </select>
+      <select id="sel"></select>
+      <button id="sortbtn">按最大漲幅排序</button>
+      <span id="cnt"></span>
+    </div>
+    <span class="hint" id="meta"></span>
+    <div class="cards" id="cards"></div>
+    <div class="chartbox"><canvas id="cv" width="1000" height="340"></canvas></div>
+    <div class="hint">紅線=股價。「最大漲幅」是這段期間最低點到最高點漲了幾倍——倍數越大，代表這檔越會噴。「距歷史高點」越接近 0%，代表現在股價越貼近高點。</div>
+  </div>
+</div>
+<script>
+let DATA={},UPDATED='';
+const drop=document.getElementById('drop'),file=document.getElementById('file');
+drop.onclick=()=>file.click();
+['dragover','dragenter'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add('drag')}));
+['dragleave','drop'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove('drag')}));
+drop.addEventListener('drop',ev=>load(ev.dataTransfer.files[0]));
+file.onchange=()=>load(file.files[0]);
+
+// 若跟 stock_history.json 放同資料夾且用本機伺服器開啟，會自動載入（file:// 開啟則維持拖檔）
+fetch('stock_history.json').then(r=>r.ok?r.json():null).then(j=>{if(j&&!Object.keys(DATA).length)init(j)}).catch(()=>{});
+
+let SORT_BY_GAIN=false;
+function stocks(){return Object.keys(DATA).filter(k=>!k.startsWith('_'))}
+function buildOptions(){
+  const sel=document.getElementById('sel');
+  const q=(document.getElementById('q').value||'').trim().toLowerCase();
+  const gmin=Number(document.getElementById('gainmin').value||0);
+  let keys=stocks();
+  if(q) keys=keys.filter(k=>k.toLowerCase().includes(q)||(DATA[k].name||'').toLowerCase().includes(q));
+  if(gmin) keys=keys.filter(k=>(DATA[k].max_gain||0)>=gmin);
+  if(SORT_BY_GAIN) keys.sort((a,b)=>(DATA[b].max_gain||0)-(DATA[a].max_gain||0));
+  sel.innerHTML=keys.map(k=>`<option value="${k}">${k} ${DATA[k].name||''}${SORT_BY_GAIN?'　('+DATA[k].max_gain+'倍)':''}</option>`).join('');
+  document.getElementById('cnt').textContent=`符合 ${keys.length} / ${stocks().length} 家`;
+  if(keys.length){ render(); }
+  else{
+    document.getElementById('meta').textContent='沒有符合條件的公司';
+    document.getElementById('cards').innerHTML='';
+    const cv=document.getElementById('cv');cv.getContext('2d').clearRect(0,0,cv.width,cv.height);
+  }
+}
+function init(j){
+  DATA=j; UPDATED=DATA._updated||'';
+  document.getElementById('loader').style.display='none';
+  document.getElementById('main').style.display='block';
+  // 顯示資料更新日；沒有 _updated（舊版json）就用各檔最後日期的最大值
+  let upd=UPDATED;
+  if(!upd){let mx='';stocks().forEach(k=>{if((DATA[k].end||'')>mx)mx=DATA[k].end});upd=mx;}
+  const el=document.getElementById('upd');
+  if(upd){
+    el.textContent='資料更新至 '+upd;
+    const age=(Date.now()-new Date(upd))/86400000;
+    if(age>7){el.classList.add('stale');el.textContent+='（已超過'+Math.floor(age)+'天，記得跑 stock_history.py 更新）';}
+  }
+  buildOptions();
+  document.getElementById('sel').onchange=render;
+  document.getElementById('q').oninput=buildOptions;
+  document.getElementById('gainmin').onchange=buildOptions;
+  document.getElementById('sortbtn').onclick=()=>{
+    SORT_BY_GAIN=!SORT_BY_GAIN;
+    document.getElementById('sortbtn').textContent=SORT_BY_GAIN?'恢復代碼順序':'按最大漲幅排序';
+    buildOptions();
+  };
+}
+function load(f){const r=new FileReader();r.onload=()=>{init(JSON.parse(r.result))};r.readAsText(f,'utf-8')}
+function render(){
+  const d=DATA[document.getElementById('sel').value];
+  if(!d)return;
+  document.getElementById('meta').textContent=`${d.stock} ${d.name||''}｜${d.start} ~ ${d.end}｜${d.total_days} 個交易日`;
+  const offHigh=d.high?((d.last/d.high-1)*100).toFixed(1):'—';
+  document.getElementById('cards').innerHTML=`
+    <div class="card"><div class="k">最大漲幅（最低→最高）</div><div class="v gold">${d.max_gain} 倍</div></div>
+    <div class="card"><div class="k">最低 / 最高</div><div class="v">${d.low} / ${d.high}</div></div>
+    <div class="card"><div class="k">期間漲幅（起→今）</div><div class="v">${d.from_first} 倍</div></div>
+    <div class="card"><div class="k">目前股價</div><div class="v">${d.last}</div></div>
+    <div class="card"><div class="k">距歷史高點</div><div class="v">${offHigh}%</div></div>`;
+  requestAnimationFrame(()=>draw(d.series));
+}
+function draw(s){
+  const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
+  let cssW=cv.offsetWidth||1000; if(cssW<50)cssW=1000;
+  const W=cv.width=Math.floor(cssW*2),H=cv.height=680; ctx.clearRect(0,0,W,H);
+  if(!s||!s.length)return;
+  const pad=90,x0=pad,x1=W-40,y0=H-50,y1=24;
+  const cl=s.map(r=>Number(r.close));
+  let lo=Math.min(...cl),hi=Math.max(...cl); if(hi===lo){hi=lo+1;lo=lo-1;}
+  const sp=hi-lo;lo-=sp*0.05;hi+=sp*0.05;const n=s.length;
+  const X=i=>n<=1?(x0+x1)/2:x0+(x1-x0)*i/(n-1),Y=v=>y0+(y1-y0)*(v-lo)/(hi-lo);
+  ctx.strokeStyle="#2a2f3a";ctx.lineWidth=2;ctx.beginPath();
+  ctx.moveTo(x0,y0);ctx.lineTo(x1,y0);ctx.moveTo(x0,y0);ctx.lineTo(x0,y1);ctx.stroke();
+  ctx.fillStyle="#9aa3b2";ctx.font="22px sans-serif";
+  for(let t=0;t<=4;t++){const v=lo+(hi-lo)*t/4;ctx.fillText(v.toFixed(0),8,Y(v)+7);}
+  // 年份刻度
+  let lastYr='';
+  for(let i=0;i<n;i++){const yr=s[i].date.slice(0,4);
+    if(yr!==lastYr){lastYr=yr;ctx.fillText(yr,X(i)-20,H-14);}}
+  ctx.strokeStyle="#ff5d5d";ctx.lineWidth=2.5;ctx.beginPath();
+  cl.forEach((v,i)=>{const x=X(i),y=Y(v);i?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.stroke();
+}
+</script></body></html>
