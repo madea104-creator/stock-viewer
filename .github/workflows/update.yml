@@ -1,0 +1,37 @@
+name: 每日更新股價資料
+
+on:
+  schedule:
+    # UTC 10:30 = 台灣時間 18:30，週一到週五（GitHub 排程偶爾會晚幾分鐘，正常）
+    - cron: '30 10 * * 1-5'
+  workflow_dispatch: {}   # 允許在 Actions 頁面手動觸發（測試用）
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: 取出 repo
+        uses: actions/checkout@v4
+
+      - name: 安裝 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安裝套件
+        run: pip install requests pandas
+
+      - name: 執行增量更新
+        run: python stock_history.py
+
+      - name: 推回更新後的資料
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add stock_history.json
+          git diff --cached --quiet || git commit -m "自動更新股價資料 $(date -u +%F)"
+          git push
